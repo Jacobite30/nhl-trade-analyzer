@@ -34,40 +34,35 @@ The app features a dark-themed modern interface with:
 
 ## Installation
 
-### Option 1: Run from Source
+### Option 1: Quick Launch (double-click)
+
+1. Download and extract the ZIP from GitHub
+2. Install dependencies once: open Command Prompt in the folder and run `pip install -r requirements.txt`
+3. Double-click **`NHL Trade Analyzer.bat`** to launch the app anytime
+
+### Option 2: Build Standalone .exe
+
+1. Install dependencies: `pip install -r requirements.txt`
+2. Double-click **`build_exe.bat`** (or run `python build.py`)
+3. Your standalone `.exe` will be in the `dist/` folder — copy it anywhere and run it without needing Python
+
+### Option 3: Run from Command Prompt
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/YOUR_USERNAME/nhl-trade-analyzer.git
+   git clone https://github.com/Jacobite30/nhl-trade-analyzer.git
    cd nhl-trade-analyzer
    ```
 
-2. **Create a virtual environment (recommended):**
-   ```bash
-   python -m venv venv
-   venv\Scripts\activate  # Windows
-   # or
-   source venv/bin/activate  # macOS/Linux
-   ```
-
-3. **Install dependencies:**
+2. **Install dependencies:**
    ```bash
    pip install -r requirements.txt
    ```
 
-4. **Run the application:**
+3. **Run the application:**
    ```bash
    python main.py
    ```
-
-### Option 2: Build Windows Executable
-
-1. Follow steps 1-3 above
-2. **Build the executable:**
-   ```bash
-   python build.py
-   ```
-3. The executable will be in the `dist/` folder
 
 ## Usage
 
@@ -92,15 +87,17 @@ The app supports multiple OpenAI models:
 
 ```
 nhl-trade-analyzer/
-├── main.py              # Application entry point
-├── build.py             # PyInstaller build script
-├── requirements.txt     # Python dependencies
-├── README.md           # This file
+├── main.py                    # Application entry point
+├── NHL Trade Analyzer.bat     # Double-click launcher for Windows
+├── build_exe.bat              # Double-click to build standalone .exe
+├── build.py                   # PyInstaller build script (Python)
+├── requirements.txt           # Python dependencies
+├── README.md                  # This file
 └── src/
     ├── __init__.py
-    ├── nhl_data.py     # NHL teams, positions, draft picks data
-    ├── analyzer.py     # OpenAI-powered trade analysis engine
-    └── gui.py          # CustomTkinter GUI application
+    ├── nhl_data.py            # NHL teams, positions, draft picks data
+    ├── analyzer.py            # OpenAI-powered trade analysis engine
+    └── gui.py                 # CustomTkinter GUI application
 ```
 
 ## Configuration
