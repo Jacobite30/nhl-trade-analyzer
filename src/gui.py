@@ -1,6 +1,7 @@
 """Main GUI for the NHL Trade Analyzer application."""
 
 import threading
+import tkinter as tk
 import customtkinter as ctk
 from tkinter import messagebox
 
@@ -12,6 +13,7 @@ from src.nhl_data import (
     SALARY_RETENTION_OPTIONS,
 )
 from src.analyzer import analyze_trade, format_analysis_text
+from src.nhl_api import fetch_all_rosters_async, search_players
 
 
 # Theme constants
@@ -25,6 +27,8 @@ TEXT_SECONDARY = "#a0a0b8"
 BORDER_COLOR = "#2a2a4a"
 SUCCESS_GREEN = "#00d26a"
 WARNING_YELLOW = "#ffc107"
+AUTOCOMPLETE_BG = "#1e2a4a"
+AUTOCOMPLETE_HOVER = "#2a3a5e"
 GRADE_COLORS = {
     "A+": "#00d26a", "A": "#00d26a", "A-": "#4caf50",
     "B+": "#8bc34a", "B": "#cddc39", "B-": "#ffeb3b",
@@ -34,13 +38,181 @@ GRADE_COLORS = {
 }
 
 
+class AutocompleteEntry(ctk.CTkFrame):
+    """Entry widget with dropdown autocomplete for player names."""
+
+    def __init__(self, master, rosters_ref, team_name_getter, on_select=None, **kwargs):
+        super().__init__(master, fg_color="transparent", **kwargs)
+        self.rosters_ref = rosters_ref
+        self.team_name_getter = team_name_getter
+        self.on_select = on_select
+        self._after_id = None
+
+        self.entry = ctk.CTkEntry(
+            self,
+            placeholder_text="Start typing player name...",
+            fg_color=BG_INPUT,
+            border_color=BORDER_COLOR,
+            font=ctk.CTkFont(size=13),
+            height=32,
+        )
+        self.entry.pack(fill="x")
+        self.entry.bind("<KeyRelease>", self._on_key)
+        self.entry.bind("<FocusOut>", self._on_focus_out)
+        self.entry.bind("<Escape>", lambda e: self._hide_dropdown())
+
+        self._dropdown = None
+        self._dropdown_items = []
+        self._item_frames = []
+        self._selected_idx = -1
+
+    def get(self):
+        return self.entry.get()
+
+    def delete(self, start, end):
+        self.entry.delete(start, end)
+
+    def insert(self, index, text):
+        self.entry.insert(index, text)
+
+    def _on_key(self, event):
+        if event.keysym in ("Up", "Down", "Return", "Escape", "Tab",
+                            "Shift_L", "Shift_R", "Control_L", "Control_R",
+                            "Alt_L", "Alt_R"):
+            if event.keysym == "Down" and self._dropdown:
+                self._dropdown_focus_next()
+            elif event.keysym == "Up" and self._dropdown:
+                self._dropdown_focus_prev()
+            elif event.keysym == "Return" and self._dropdown:
+                self._dropdown_select_current()
+            return
+
+        if self._after_id is not None:
+            self.after_cancel(self._after_id)
+        self._after_id = self.after(150, self._do_search)
+
+    def _do_search(self):
+        self._after_id = None
+        query = self.entry.get().strip()
+        if len(query) < 2:
+            self._hide_dropdown()
+            return
+
+        rosters = self.rosters_ref.get("data")
+        if not rosters:
+            return
+
+        team = self.team_name_getter()
+        results = search_players(rosters, query, team_filter=team, limit=8)
+        if len(results) < 8:
+            all_results = search_players(rosters, query, team_filter=None, limit=8)
+            seen = {r[1]["id"] for r in results}
+            for r in all_results:
+                if r[1]["id"] not in seen:
+                    results.append(r)
+                    if len(results) >= 10:
+                        break
+
+        if results:
+            self._show_dropdown(results)
+        else:
+            self._hide_dropdown()
+
+    def _show_dropdown(self, results):
+        self._hide_dropdown()
+        self._dropdown_items = results
+        self._selected_idx = -1
+
+        self._dropdown = tk.Toplevel(self.winfo_toplevel())
+        self._dropdown.withdraw()
+        self._dropdown.overrideredirect(True)
+        self._dropdown.configure(bg=AUTOCOMPLETE_BG)
+
+        x = self.entry.winfo_rootx()
+        y = self.entry.winfo_rooty() + self.entry.winfo_height()
+        width = self.entry.winfo_width()
+
+        self._item_frames = []
+        for i, (team_name, player) in enumerate(results):
+            frame = tk.Frame(self._dropdown, bg=AUTOCOMPLETE_BG, cursor="hand2")
+            frame.pack(fill="x", padx=1, pady=0)
+
+            display_text = f"  {player['name']}  ({player['position']}, Age {player['age']})"
+            if team_name != self.team_name_getter():
+                display_text += f"  - {team_name}"
+
+            label = tk.Label(
+                frame, text=display_text, bg=AUTOCOMPLETE_BG,
+                fg=TEXT_PRIMARY, font=("Segoe UI", 11), anchor="w", padx=8, pady=4,
+            )
+            label.pack(fill="x")
+
+            idx = i
+            for widget in (frame, label):
+                widget.bind("<Button-1>", lambda e, ii=idx: self._select_item(ii))
+                widget.bind("<Enter>", lambda e, f=frame, l=label: self._hover_item(f, l, True))
+                widget.bind("<Leave>", lambda e, f=frame, l=label: self._hover_item(f, l, False))
+
+            self._item_frames.append((frame, label))
+
+        self._dropdown.geometry(f"{width}x{min(len(results) * 30, 300)}+{x}+{y}")
+        self._dropdown.deiconify()
+        self._dropdown.lift()
+
+    def _hover_item(self, frame, label, entering):
+        bg = AUTOCOMPLETE_HOVER if entering else AUTOCOMPLETE_BG
+        frame.configure(bg=bg)
+        label.configure(bg=bg)
+
+    def _dropdown_focus_next(self):
+        if not self._item_frames:
+            return
+        self._selected_idx = min(self._selected_idx + 1, len(self._item_frames) - 1)
+        self._highlight_selected()
+
+    def _dropdown_focus_prev(self):
+        if not self._item_frames:
+            return
+        self._selected_idx = max(self._selected_idx - 1, 0)
+        self._highlight_selected()
+
+    def _highlight_selected(self):
+        for i, (frame, label) in enumerate(self._item_frames):
+            bg = AUTOCOMPLETE_HOVER if i == self._selected_idx else AUTOCOMPLETE_BG
+            frame.configure(bg=bg)
+            label.configure(bg=bg)
+
+    def _dropdown_select_current(self):
+        if 0 <= self._selected_idx < len(self._dropdown_items):
+            self._select_item(self._selected_idx)
+
+    def _select_item(self, index):
+        team_name, player = self._dropdown_items[index]
+        self.entry.delete(0, "end")
+        self.entry.insert(0, player["name"])
+        self._hide_dropdown()
+        if self.on_select:
+            self.on_select(team_name, player)
+
+    def _hide_dropdown(self):
+        if self._dropdown is not None:
+            self._dropdown.destroy()
+            self._dropdown = None
+            self._item_frames = []
+            self._dropdown_items = []
+
+    def _on_focus_out(self, event):
+        self.after(200, self._hide_dropdown)
+
+
 class TradeAssetFrame(ctk.CTkFrame):
     """Frame for adding and displaying trade assets for one team."""
 
-    def __init__(self, master, team_name, team_color, **kwargs):
+    def __init__(self, master, team_name, team_color, rosters_ref=None, **kwargs):
         super().__init__(master, fg_color=BG_CARD, corner_radius=12, **kwargs)
         self.team_name = team_name
         self.team_color = team_color
+        self.rosters_ref = rosters_ref or {"data": None}
         self.assets = []
 
         self._build_ui()
@@ -121,17 +293,25 @@ class TradeAssetFrame(ctk.CTkFrame):
         for widget in self.input_frame.winfo_children():
             widget.destroy()
 
+    def _on_player_selected(self, team_name, player):
+        """Called when a player is selected from autocomplete."""
+        if hasattr(self, "position_var"):
+            self.position_var.set(player.get("position", "C"))
+        if hasattr(self, "age_entry"):
+            self.age_entry.delete(0, "end")
+            age = player.get("age", "")
+            if age:
+                self.age_entry.insert(0, str(age))
+
     def _build_player_inputs(self):
         self._clear_inputs()
 
-        # Name
-        self.name_entry = ctk.CTkEntry(
+        # Name with autocomplete
+        self.name_entry = AutocompleteEntry(
             self.input_frame,
-            placeholder_text="Player Name",
-            fg_color=BG_INPUT,
-            border_color=BORDER_COLOR,
-            font=ctk.CTkFont(size=13),
-            height=32,
+            rosters_ref=self.rosters_ref,
+            team_name_getter=lambda: self.team_name,
+            on_select=self._on_player_selected,
         )
         self.name_entry.pack(fill="x", pady=2)
 
@@ -484,8 +664,10 @@ class NHLTradeAnalyzerApp(ctk.CTk):
         self.api_key = ""
         self.model = "gpt-4o"
         self.trade_history = []
+        self.rosters_ref = {"data": None, "loading": True, "teams_loaded": 0}
 
         self._build_ui()
+        self._start_roster_loading()
 
     def _build_ui(self):
         # Top bar
@@ -519,6 +701,14 @@ class NHLTradeAnalyzerApp(ctk.CTk):
             command=self._open_settings,
         )
         settings_btn.pack(side="right", padx=20)
+
+        self.roster_status_label = ctk.CTkLabel(
+            top_bar,
+            text="",
+            font=ctk.CTkFont(size=11),
+            text_color=TEXT_SECONDARY,
+        )
+        self.roster_status_label.pack(side="right", padx=(0, 12))
 
         # Team selection bar
         team_bar = ctk.CTkFrame(self, fg_color=BG_DARK, height=50)
@@ -604,6 +794,7 @@ class NHLTradeAnalyzerApp(ctk.CTk):
             trade_panels,
             initial_t1,
             get_team_color(initial_t1),
+            rosters_ref=self.rosters_ref,
         )
         self.team1_panel.pack(side="left", fill="both", expand=True, padx=(0, 4))
 
@@ -611,6 +802,7 @@ class NHLTradeAnalyzerApp(ctk.CTk):
             trade_panels,
             initial_t2,
             get_team_color(initial_t2),
+            rosters_ref=self.rosters_ref,
         )
         self.team2_panel.pack(side="left", fill="both", expand=True, padx=(4, 0))
 
@@ -715,7 +907,9 @@ class NHLTradeAnalyzerApp(ctk.CTk):
         self.results_text.pack(fill="both", expand=True, padx=16, pady=(4, 8))
         self.results_text.insert("1.0", "Enter a trade and click 'Analyze Trade' to get started.\n\n"
                                         "Tips:\n"
-                                        "• Add players with cap hit info for better analysis\n"
+                                        "• Start typing a player name for auto-suggestions\n"
+                                        "• Position and age auto-fill when you select a player\n"
+                                        "• Add cap hit info for more detailed analysis\n"
                                         "• Include draft picks and prospects\n"
                                         "• Set salary retention if applicable\n"
                                         "• Configure your OpenAI API key in Settings")
@@ -733,6 +927,31 @@ class NHLTradeAnalyzerApp(ctk.CTk):
             command=self._show_history,
         )
         self.history_btn.pack(fill="x", padx=16, pady=(0, 12))
+
+    def _start_roster_loading(self):
+        """Start loading all NHL rosters in the background."""
+        self.roster_status_label.configure(
+            text="Loading NHL rosters...", text_color=WARNING_YELLOW,
+        )
+
+        def on_roster_update(team_name, data):
+            if team_name is None:
+                self.rosters_ref["data"] = data
+                self.rosters_ref["loading"] = False
+                total_players = sum(len(players) for players in data.values())
+                self.after(0, lambda: self.roster_status_label.configure(
+                    text=f"{total_players} players loaded - autocomplete ready",
+                    text_color=SUCCESS_GREEN,
+                ))
+            else:
+                self.rosters_ref["teams_loaded"] += 1
+                count = self.rosters_ref["teams_loaded"]
+                self.after(0, lambda c=count: self.roster_status_label.configure(
+                    text=f"Loading rosters... ({c}/32)",
+                    text_color=WARNING_YELLOW,
+                ))
+
+        fetch_all_rosters_async(on_roster_update)
 
     def _on_team1_change(self, team_name):
         self.team1_panel.update_team(team_name, get_team_color(team_name))
